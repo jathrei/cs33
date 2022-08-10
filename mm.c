@@ -68,8 +68,9 @@ enum block_state { FREE,
                    ALLOC };
 
 #define CHUNKSIZE (1 << 16) /* initial heap size (bytes) */
-#define OVERHEAD (sizeof(header_t) + sizeof(footer_t)) /* overhead of the header and footer of an allocated block */
+#define OVERHEAD (2*HEADER_SIZE) /* overhead of the header and footer of an allocated block */
 #define MIN_BLOCK_SIZE (32) /* the minimum block size needed to keep in a freelist (header + footer + next pointer + prev pointer) */
+#define HEADER_SIZE (sizeof(header_t))
 
 /* Global variables */
 static block_t *prologue; /* pointer to first block */
@@ -93,12 +94,12 @@ int mm_init(void) {
         return -1;
     /* initialize the prologue */
     prologue->allocated = ALLOC;
-    prologue->block_size = sizeof(header_t);
+    prologue->block_size = HEADER_SIZE;
     /* initialize the first free block */
 
     //LETS TRY THIS
-    //set prologue to actual beginning
-    prologue = (void *)prologue + sizeof(header_t);
+    //set prologue to actual beginning, slightly more efficient i think
+    prologue = (void *)prologue + HEADER_SIZE;
     //block_t *init_block = (void *)prologue + sizeof(header_t);
     prologue->allocated = FREE;
     //init_block->allocated = FREE;
@@ -115,6 +116,7 @@ int mm_init(void) {
     //block + blocksize goes to next block
     epilogue->allocated = ALLOC;
     epilogue->block_size = 0;
+    printf("%zu", HEADER_SIZE);
     return 0;
 }
 /* $end mminit */
@@ -167,7 +169,7 @@ void *mm_malloc(size_t size) {
  */
 /* $begin mmfree */
 void mm_free(void *payload) {
-    block_t *block = payload - sizeof(header_t);
+    block_t *block = payload - HEADER_SIZE;
     block->allocated = FREE;
     footer_t *footer = get_footer(block);
     footer->allocated = FREE;
@@ -188,7 +190,7 @@ void *mm_realloc(void *ptr, size_t size) {
         printf("ERROR: mm_malloc failed in mm_realloc\n");
         exit(1);
     }
-    block_t* block = ptr - sizeof(header_t);
+    block_t* block = ptr - HEADER_SIZE;
     copySize = block->block_size;
     if (size < copySize)
         copySize = size;
@@ -201,12 +203,12 @@ void *mm_realloc(void *ptr, size_t size) {
  * mm_checkheap - Check the heap for consistency
  */
 void mm_checkheap(int verbose) {
-    block_t *block = (void *)prologue - sizeof(header_t);
+    block_t *block = (void *)prologue - HEADER_SIZE;
 
     if (verbose)
         printf("Heap (%p):\n", block);
 
-    if (block->block_size != sizeof(header_t) || !block->allocated)
+    if (block->block_size != HEADER_SIZE || !block->allocated)
         printf("Bad prologue header\n");
     checkblock(prologue);
 
@@ -238,7 +240,7 @@ static block_t *extend_heap(size_t words) {
     /* The newly acquired region will start directly after the epilogue block */
     /* Initialize free block header/footer and the new epilogue header */
     /* use old epilogue as new free block header */
-    block = (void *)block - sizeof(header_t);
+    block = (void *)block - HEADER_SIZE;
     block->allocated = FREE;
     block->block_size = size;
     /* free block footer */
@@ -246,7 +248,7 @@ static block_t *extend_heap(size_t words) {
     block_footer->allocated = FREE;
     block_footer->block_size = block->block_size;
     /* new epilogue header */
-    header_t *new_epilogue = (void *)block_footer + sizeof(header_t);
+    header_t *new_epilogue = (void *)block_footer + HEADER_SIZE;
     new_epilogue->allocated = ALLOC;
     new_epilogue->block_size = 0;
     /* Coalesce if the previous block was free */
@@ -306,7 +308,7 @@ static block_t *find_fit(size_t asize) {
  * coalesce - boundary tag coalescing. Return ptr to coalesced block
  */
 static block_t *coalesce(block_t *block) {
-    footer_t *prev_footer = (void *)block - sizeof(header_t);
+    footer_t *prev_footer = (void *)block - HEADER_SIZE;
     header_t *next_header = (void *)block + block->block_size;
     bool prev_alloc = prev_footer->allocated;
     bool next_alloc = next_header->allocated;
@@ -326,7 +328,7 @@ static block_t *coalesce(block_t *block) {
 
     else if (!prev_alloc && next_alloc) { /* Case 3 */
         /* Update header of prev block to include current block's size */
-        block_t *prev_block = (void *)prev_footer - prev_footer->block_size + sizeof(header_t);
+        block_t *prev_block = (void *)prev_footer - prev_footer->block_size + HEADER_SIZE;
         prev_block->block_size += block->block_size;
         /* Update footer of current block to reflect new size */
         footer_t *footer = get_footer(prev_block);
@@ -336,7 +338,7 @@ static block_t *coalesce(block_t *block) {
 
     else { /* Case 4 */
         /* Update header of prev block to include current and next block's size */
-        block_t *prev_block = (void *)prev_footer - prev_footer->block_size + sizeof(header_t);
+        block_t *prev_block = (void *)prev_footer - prev_footer->block_size + HEADER_SIZE;
         prev_block->block_size += block->block_size + next_header->block_size;
         /* Update footer of next block to reflect new size */
         footer_t *next_footer = get_footer(prev_block);
