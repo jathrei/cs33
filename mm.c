@@ -95,14 +95,23 @@ int mm_init(void) {
     prologue->allocated = ALLOC;
     prologue->block_size = sizeof(header_t);
     /* initialize the first free block */
-    block_t *init_block = (void *)prologue + sizeof(header_t);
-    init_block->allocated = FREE;
-    init_block->block_size = CHUNKSIZE - OVERHEAD;
-    footer_t *init_footer = get_footer(init_block);
+
+    //LETS TRY THIS
+    //set prologue to actual beginning
+    prologue = (void *)prologue + sizeof(header_t);
+    //block_t *init_block = (void *)prologue + sizeof(header_t);
+    prologue->allocated = FREE;
+    //init_block->allocated = FREE;
+    prologue->block_size = CHUNKSIZE - OVERHEAD;
+    //init_block->block_size = CHUNKSIZE - OVERHEAD;
+    footer_t *init_footer = get_footer(prologue);
+    //footer_t *init_footer = get_footer(init_block);
     init_footer->allocated = FREE;
-    init_footer->block_size = init_block->block_size;
+    init_footer->block_size = prologue->block_size;
+    //init_footer->block_size = init_block->block_size;
     /* initialize the epilogue - block size 0 will be used as a terminating condition */
-    block_t *epilogue = (void *)init_block + init_block->block_size;
+    block_t *epilogue = (void *)prologue + prologue->block_size;
+    //block_t *epilogue = (void *)init_block + init_block->block_size;
     //block + blocksize goes to next block
     epilogue->allocated = ALLOC;
     epilogue->block_size = 0;
@@ -192,17 +201,17 @@ void *mm_realloc(void *ptr, size_t size) {
  * mm_checkheap - Check the heap for consistency
  */
 void mm_checkheap(int verbose) {
-    block_t *block = prologue;
+    block_t *block = (void *)prologue - sizeof(header_t);
 
     if (verbose)
-        printf("Heap (%p):\n", prologue);
+        printf("Heap (%p):\n", block);
 
     if (block->block_size != sizeof(header_t) || !block->allocated)
         printf("Bad prologue header\n");
     checkblock(prologue);
 
     /* iterate through the heap (both free and allocated blocks will be present) */
-    for (block = (void*)prologue+prologue->block_size; block->block_size > 0; block = (void *)block + block->block_size) {
+    for (block = (void*)prologue; block->block_size > 0; block = (void *)block + block->block_size) {
         if (verbose)
             printblock(block);
         checkblock(block);
@@ -284,7 +293,7 @@ static block_t *find_fit(size_t asize) {
     /* first fit search */
     block_t *b;
 
-    for (b = (void*)prologue + prologue->block_size; b->block_size > 0; b = (void *)b + b->block_size) {
+    for (b = (void*)prologue; b->block_size > 0; b = (void *)b + b->block_size) {
         /* block must be free and the size must be large enough to hold the request */
         if (!b->allocated && asize <= b->block_size) {
             return b;
