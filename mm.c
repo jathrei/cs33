@@ -71,9 +71,10 @@ enum block_state { FREE,
 #define OVERHEAD (2*HEADER_SIZE) /* overhead of the header and footer of an allocated block */
 #define MIN_BLOCK_SIZE (32) /* the minimum block size needed to keep in a freelist (header + footer + next pointer + prev pointer) */
 #define HEADER_SIZE (sizeof(header_t))
+#define BLOCK_TSIZE (sizeof(block_t))
 
 /* Global variables */
-static block_t *prologue; /* pointer to first block */
+static block_t *free_list_startp; /* pointer to free list start */
 
 /* function prototypes for internal helper routines */
 static block_t *extend_heap(size_t words);
@@ -83,6 +84,8 @@ static block_t *coalesce(block_t *block);
 static footer_t *get_footer(block_t *block);
 static void printblock(block_t *block);
 static void checkblock(block_t *block);
+static void add_2list(block_t *block);
+static void remove_from_list(block_t *block);
 
 /*
  * mm_init - Initialize the memory manager
@@ -90,33 +93,52 @@ static void checkblock(block_t *block);
 /* $begin mminit */
 int mm_init(void) {
     /* create the initial empty heap */
-    if ((prologue = mem_sbrk(CHUNKSIZE)) == (void*)-1)
+
+    //changed from chunksize to headersize + minblocksize + footersize
+    block_t *heap_startp;
+    if ((heap_startp = mem_sbrk(CHUNKSIZE)) == (void*)-1) //maybe add MIN_BLOCK_SIZE
         return -1;
     /* initialize the prologue */
-    prologue->allocated = ALLOC;
-    prologue->block_size = HEADER_SIZE;
+    heap_startp->allocated = ALLOC;
+    heap_startp->block_size = HEADER_SIZE;
     /* initialize the first free block */
 
     //LETS TRY THIS
-    //set prologue to actual beginning, slightly more efficient i think
-    prologue = (void *)prologue + HEADER_SIZE;
+    //start free list block
+    //initialize free list block
+    free_list_startp = (void *)heap_startp + HEADER_SIZE;
     //block_t *init_block = (void *)prologue + sizeof(header_t);
-    prologue->allocated = FREE;
+    free_list_startp->allocated = ALLOC;
     //init_block->allocated = FREE;
-    prologue->block_size = CHUNKSIZE - OVERHEAD;
-    //init_block->block_size = CHUNKSIZE - OVERHEAD;
-    footer_t *init_footer = get_footer(prologue);
-    //footer_t *init_footer = get_footer(init_block);
+    free_list_startp->block_size = (MIN_BLOCK_SIZE);
+    footer_t *init_free_list_footer = get_footer(free_list_startp);
+    init_free_list_footer->allocated = ALLOC;
+    init_free_list_footer->block_size = free_list_startp->block_size;
+
+    //create first free block
+    block_t *init_block = (void *)free_list_startp + MIN_BLOCK_SIZE;
+    init_block->allocated = FREE;
+    init_block->block_size = ((CHUNKSIZE - OVERHEAD)-MIN_BLOCK_SIZE);
+    footer_t *init_footer = get_footer(init_block);
     init_footer->allocated = FREE;
-    init_footer->block_size = prologue->block_size;
-    //init_footer->block_size = init_block->block_size;
+    init_footer->block_size = init_block->block_size;
+
+    //set pointers
+    free_list_startp->body.prev = NULL;
+    free_list_startp->body.next = (void *)init_block;
+    init_block->body.prev = (void *)free_list_startp;
+    init_block->body.next = NULL;
+
+    //maybe remember min_bloxk_szie is actulaly wrong its 24, so maybe CHANGE
+    //that later to check efficiency
+
     /* initialize the epilogue - block size 0 will be used as a terminating condition */
-    block_t *epilogue = (void *)prologue + prologue->block_size;
+    header_t *epilogue = (void *)init_block + init_block->block_size;
     //block_t *epilogue = (void *)init_block + init_block->block_size;
     //block + blocksize goes to next block
     epilogue->allocated = ALLOC;
     epilogue->block_size = 0;
-    printf("%zu", HEADER_SIZE);
+
     return 0;
 }
 /* $end mminit */
@@ -128,7 +150,7 @@ int mm_init(void) {
 void *mm_malloc(size_t size) {
     uint32_t asize;       /* adjusted block size */
     uint32_t extendsize;  /* amount to extend heap if no fit */
-    uint32_t extendwords; /* number of words to extend heap if no fit */
+    //uint32_t extendwords; /* number of words to extend heap if no fit */
     block_t *block;
 
     /* Ignore spurious requests */
@@ -145,6 +167,8 @@ void *mm_malloc(size_t size) {
     }
 
     /* Search the free list for a fit */
+    //maybe get rid of the NULL comparison, if it exists itll run ->redundant
+    //OPTMIZATION HERE??????
     if ((block = find_fit(asize)) != NULL) {
         place(block, asize);
         return block->body.payload;
@@ -154,8 +178,10 @@ void *mm_malloc(size_t size) {
     extendsize = (asize > CHUNKSIZE) // extend by the larger of the two
                      ? asize
                      : CHUNKSIZE;
-    extendwords = extendsize >> 3; // extendsize/8
-    if ((block = extend_heap(extendwords)) != NULL) {
+    //extendwords = extendsize >> 3; // extendsize/8
+    //redudnan? if it exists wont it run, dont need to compare to null
+    //CEHCK THAT LATER ^
+    if ((block = extend_heap(extendsize >> 3)) != NULL) {
         place(block, asize);
         return block->body.payload;
     }
@@ -173,6 +199,7 @@ void mm_free(void *payload) {
     block->allocated = FREE;
     footer_t *footer = get_footer(block);
     footer->allocated = FREE;
+    //dont include add to list because its included in the coalesce
     coalesce(block);
 }
 
@@ -199,21 +226,65 @@ void *mm_realloc(void *ptr, size_t size) {
     return newp;
 }
 
+
+//ADDS THE BLOCK TO THE FREE LIST BRUH
+static void add_2list(block_t *block){
+
+    block_t *front = (void *)free_list_startp;
+
+    //start of list
+    if(front->body.next == NULL){
+      block->body.prev = (void *)front;
+      block->body.next = NULL;
+      front->body.next = (void *)block;
+    }
+    else{
+      block_t *temp = (void *)front;
+      temp = temp->body.next;
+      temp->body.prev = (void *)block;
+      block->body.next = (void *)temp;
+      front->body.next = (void *)block;
+      block->body.prev = (void *)front;
+    }
+
+}
+
+static void remove_from_list(block_t *block){
+
+    block_t *prev_p = block->body.prev;
+    block_t *next_p = block->body.next;
+
+    //EDGE CASE?? maybe see if theres ever a condition in which the alllocated f_p
+    //is trying to be removed from the list
+    if(next_p == NULL){ //the block being removed is at the front of the list
+      prev_p->body.next = NULL;
+      block->body.prev = NULL;
+    }
+    else{
+      prev_p->body.next = (void *)next_p;
+      next_p->body.prev = (void *)prev_p;
+      block->body.prev = NULL;
+      block->body.next = NULL;
+    }
+
+}
+
+
 /*
  * mm_checkheap - Check the heap for consistency
  */
 void mm_checkheap(int verbose) {
-    block_t *block = (void *)prologue - HEADER_SIZE;
+    block_t *block = (void *)free_list_startp - HEADER_SIZE;
 
     if (verbose)
         printf("Heap (%p):\n", block);
 
     if (block->block_size != HEADER_SIZE || !block->allocated)
         printf("Bad prologue header\n");
-    checkblock(prologue);
+    checkblock(block);
 
     /* iterate through the heap (both free and allocated blocks will be present) */
-    for (block = (void*)prologue; block->block_size > 0; block = (void *)block + block->block_size) {
+    for (block = (void*)free_list_startp; block->block_size > 0; block = (void *)block + block->block_size) {
         if (verbose)
             printblock(block);
         checkblock(block);
@@ -271,7 +342,13 @@ static void place(block_t *block, size_t asize) {
         footer_t *footer = get_footer(block);
         footer->block_size = asize;
         footer->allocated = ALLOC;
+
+        //remove from free list
+        remove_from_list(block);
+
         /* update the header of the new free block */
+        //TRY LATER TO SEE IF FASTER, SHIFT BLOCK BY BLOCKSIZE instead
+        //of making new_block, then after add to free list, shift it back
         block_t *new_block = (void *)block + block->block_size;
         new_block->block_size = split_size;
         new_block->allocated = FREE;
@@ -279,24 +356,38 @@ static void place(block_t *block, size_t asize) {
         footer_t *new_footer = get_footer(new_block);
         new_footer->block_size = split_size;
         new_footer->allocated = FREE;
+
+        //add to free list
+        add_2list(new_block);
+
     } else {
         /* splitting the block will cause a splinter so we just include it in the allocated block */
         block->allocated = ALLOC;
         footer_t *footer = get_footer(block);
         footer->allocated = ALLOC;
+
+        //remove from free list
+        remove_from_list(block);
     }
 }
 /* $end mmplace */
 
 /*
  * find_fit - Find a fit for a block with asize bytes
+ * explicit free list
  */
 static block_t *find_fit(size_t asize) {
     /* first fit search */
     block_t *b;
 
-    for (b = (void*)prologue; b->block_size > 0; b = (void *)b + b->block_size) {
+
+    //NOTE - MAYBE CHANGE HOW THIS IS DONE? from seg list idea
+    for (b = (void*)free_list_startp; b != NULL; b = b->body.next) {
         /* block must be free and the size must be large enough to hold the request */
+        //EVENTUALLY REMOVE THIS ALLOCATION CHECKER BECAUSE ITLL BE A LIST OF FREE ONLY
+        //ONLY FIRST IN FREE LIST IS ALLOCATED
+
+        //removed above condition ^^ really should be fine to take out the allocated check
         if (!b->allocated && asize <= b->block_size) {
             return b;
         }
@@ -315,20 +406,28 @@ static block_t *coalesce(block_t *block) {
 
     if (prev_alloc && next_alloc) { /* Case 1 */
         /* no coalesceing */
+        add_2list(block);
         return block;
     }
 
     else if (prev_alloc && !next_alloc) { /* Case 2 */
         /* Update header of current block to include next block's size */
-        block->block_size += next_header->block_size;
+        //current block already says free header mate
+        //remove next from list
+        block_t *next_block = (void *)next_header;
+        remove_from_list(next_block);
+
+        block->block_size += next_block->block_size;
         /* Update footer of next block to reflect new size */
         footer_t *next_footer = get_footer(block);
         next_footer->block_size = block->block_size;
     }
 
     else if (!prev_alloc && next_alloc) { /* Case 3 */
-        /* Update header of prev block to include current block's size */
+        //remove previous from list
         block_t *prev_block = (void *)prev_footer - prev_footer->block_size + HEADER_SIZE;
+        remove_from_list(prev_block);
+        /* Update header of prev block to include current block's size */
         prev_block->block_size += block->block_size;
         /* Update footer of current block to reflect new size */
         footer_t *footer = get_footer(prev_block);
@@ -338,7 +437,12 @@ static block_t *coalesce(block_t *block) {
 
     else { /* Case 4 */
         /* Update header of prev block to include current and next block's size */
+        //remove from lost prev and next
         block_t *prev_block = (void *)prev_footer - prev_footer->block_size + HEADER_SIZE;
+        remove_from_list(prev_block);
+        block_t *next_block = (void *)next_header;
+        remove_from_list(next_block);
+
         prev_block->block_size += block->block_size + next_header->block_size;
         /* Update footer of next block to reflect new size */
         footer_t *next_footer = get_footer(prev_block);
@@ -346,6 +450,7 @@ static block_t *coalesce(block_t *block) {
         block = prev_block;
     }
 
+    add_2list(block);
     return block;
 }
 
